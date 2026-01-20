@@ -18,30 +18,67 @@ func NewHandler(b biz.Biz) *Handler {
 }
 
 // RegisterRoutes 注册 HTTP 路由.
+// 路由设计与 TGO 保持兼容：
+// - /v1/ai/* -> tgo-ai 接口
+// - /v1/rag/* -> tgo-rag 接口
+// - /v1/workflow/* -> tgo-workflow 接口
 func (h *Handler) RegisterRoutes(r *gin.Engine) {
-	// API v1 路由组
-	v1 := r.Group("/api/v1")
-
-	// Agent 路由
-	h.registerAgentRoutes(v1)
-
-	// Session 路由
-	h.registerSessionRoutes(v1)
-
-	// Chat 路由
-	h.registerChatRoutes(v1)
-
-	// Knowledge 路由
-	h.registerKnowledgeRoutes(v1)
-
-	// Tenant 路由
-	h.registerTenantRoutes(v1)
-
-	// Auth 路由
-	h.registerAuthRoutes(v1)
-
 	// 健康检查
 	r.GET("/health", h.Health)
+
+	// ==================== TGO-AI 兼容接口 (/v1/ai/) ====================
+	ai := r.Group("/v1/ai")
+	{
+		// Agents (对应 tgo-ai /v1/agents)
+		h.registerAIAgentRoutes(ai)
+		// Teams (对应 tgo-ai /v1/teams)
+		h.registerAITeamRoutes(ai)
+		// LLM Providers (对应 tgo-ai /v1/llm-providers)
+		h.registerAIProviderRoutes(ai)
+		// Tools (对应 tgo-ai /v1/tools)
+		h.registerAIToolRoutes(ai)
+		// Chat (对应 tgo-ai /v1/chat)
+		ai.POST("/chat", h.Chat)
+		// Project AI Configs (对应 tgo-ai /v1/project-ai-configs)
+		h.registerAIConfigRoutes(ai)
+	}
+
+	// ==================== TGO-RAG 兼容接口 (/v1/rag/) ====================
+	rag := r.Group("/v1/rag")
+	{
+		// Collections (对应 tgo-rag /collections)
+		h.registerRAGCollectionRoutes(rag)
+		// Files (对应 tgo-rag /files)
+		h.registerRAGFileRoutes(rag)
+		// Websites (对应 tgo-rag /websites)
+		h.registerRAGWebsiteRoutes(rag)
+		// QA (对应 tgo-rag /qa)
+		h.registerRAGQARoutes(rag)
+		// Embedding Config (对应 tgo-rag /embedding-config)
+		h.registerRAGEmbeddingConfigRoutes(rag)
+	}
+
+	// ==================== TGO-Workflow 兼容接口 (/v1/workflow/) ====================
+	workflow := r.Group("/v1/workflow")
+	{
+		// Workflows (对应 tgo-workflow /workflows)
+		h.registerWorkflowRoutes(workflow)
+		// Executions (对应 tgo-workflow /executions)
+		h.registerExecutionRoutes(workflow)
+	}
+
+	// ==================== 内部管理接口 (/api/v1/) ====================
+	v1 := r.Group("/api/v1")
+	{
+		// Session 路由
+		h.registerSessionRoutes(v1)
+		// Tenant 路由
+		h.registerTenantRoutes(v1)
+		// Auth 路由
+		h.registerAuthRoutes(v1)
+		// Settings 路由
+		h.registerSettingsRoutes(v1)
+	}
 }
 
 // registerAgentRoutes 注册 Agent 路由.
