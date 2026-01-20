@@ -1,46 +1,77 @@
-version: '3.8'
+name: next-chat
 
 services:
+  # PostgreSQL with pgvector extension (复用 TGO 配置)
   postgres:
     image: pgvector/pgvector:pg16
     container_name: next-chat-postgres
     environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: next_chat
+      POSTGRES_DB: ${POSTGRES_DB:-next_chat}
+      POSTGRES_USER: ${POSTGRES_USER:-next_chat}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-next_chat}
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql:ro
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER"]
+      interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
+  # Redis cache (复用 TGO 配置)
   redis:
     image: redis:7-alpine
     container_name: next-chat-redis
+    command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
-      - redis_data:/data
+      - ./data/redis:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
       retries: 5
+    restart: unless-stopped
 
+  # WuKongIM service (复用 TGO 配置)
+  wukongim:
+    image: registry.cn-shanghai.aliyuncs.com/wukongim/wukongim:v2.2.3-dev
+    container_name: next-chat-wukongim
+    environment:
+      WK_EXTERNAL_IP: ${SERVER_HOST:-127.0.0.1}
+      WK_TOKENAUTHON: ${WK_TOKENAUTHON:-false}
+    volumes:
+      - ./data/wukongim:/root/wukongim
+    ports:
+      - "5100:5100"   # tcp
+      - "5200:5200"   # websocket
+      - "5300:5300"   # admin
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -Y off -O /dev/null http://localhost:5001/health > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+    profiles:
+      - full
+
+  # AICenter service (Go)
   aicenter:
     build:
       context: ./aicenter
       dockerfile: Dockerfile
     container_name: next-chat-aicenter
     ports:
-      - "8081:8081"
+      - "${AICENTER_PORT:-8081}:8081"
     environment:
-      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/next_chat?sslmode=disable
+      - DATABASE_URL=postgres://${POSTGRES_USER:-next_chat}:${POSTGRES_PASSWORD:-next_chat}@postgres:5432/${POSTGRES_DB:-next_chat}?sslmode=disable
       - REDIS_URL=redis://redis:6379
+    env_file:
+      - .env
     depends_on:
       postgres:
         condition: service_healthy
@@ -48,6 +79,13 @@ services:
         condition: service_healthy
     volumes:
       - ./aicenter/configs:/app/configs
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:8081/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
 
 volumes:
   postgres_data:
