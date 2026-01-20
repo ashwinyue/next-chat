@@ -3,16 +3,142 @@ package http
 
 import (
 	"net/http"
+	"strings"
 
+	"github.com/cloudwego/eino/adk"
+	"github.com/cloudwego/eino/schema"
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/next-chat/aicenter/internal/pkg/sse"
 )
 
 // ==================== TGO-AI Handlers ====================
 
-// RunAgent 运行 Agent（SSE 流式）.
+// SupervisorRunRequest TGO 兼容的 Agent 运行请求（对应 tgo-ai SupervisorRunRequest）.
+type SupervisorRunRequest struct {
+	TeamID    string `json:"team_id"`
+	AgentID   string `json:"agent_id"`
+	SessionID string `json:"session_id"`
+	Message   string `json:"message" binding:"required"`
+	Stream    *bool  `json:"stream"`
+}
+
+// RunAgent 运行 Agent（SSE 流式）- 对应 tgo-ai POST /agents/run.
 func (h *Handler) RunAgent(c *gin.Context) {
-	// TODO: 实现 Agent 运行，支持 SSE 流式输出
-	c.JSON(http.StatusNotImplemented, gin.H{"error": "not implemented"})
+	var req SupervisorRunRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	// 默认使用流式输出
+	stream := true
+	if req.Stream != nil {
+		stream = *req.Stream
+	}
+
+	// 如果没有 session_id，创建一个
+	sessionID := req.SessionID
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
+
+	messageID := uuid.New().String()
+
+	if !stream {
+		// 非流式：收集所有响应后返回
+		userMessage := schema.UserMessage(req.Message)
+		iter, err := h.biz.Agents().Chat(c.Request.Context(), sessionID, []adk.Message{userMessage})
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
+		var content strings.Builder
+		for {
+			event, ok := iter.Next()
+			if !ok {
+				break
+			}
+			// 从 AgentOutput 中提取消息内容
+			if event.Output != nil && event.Output.MessageOutput != nil {
+				if msg := event.Output.MessageOutput.Message; msg != nil {
+					content.WriteString(msg.Content)
+				}
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"session_id": sessionID,
+			"message_id": messageID,
+			"content":    content.String(),
+		})
+		return
+	}
+
+	// 流式：SSE 输出
+	writer := sse.NewGinWriter(c)
+	writer.SetHeaders()
+
+	processor := sse.NewDefaultEventProcessor()
+	contentBuffer := &strings.Builder{}
+	eventCtx := &sse.EventContext{
+		SessionID:     sessionID,
+		MessageID:     messageID,
+		ContentBuffer: contentBuffer,
+	}
+
+	// 发送开始事件
+	if err := writer.SendStart(sessionID, messageID); err != nil {
+		writer.SendError("failed to send start event")
+		return
+	}
+
+	userMessage := schema.UserMessage(req.Message)
+	iter, err := h.biz.Agents().Chat(c.Request.Context(), sessionID, []adk.Message{userMessage})
+	if err != nil {
+		_ = writer.Send(sse.Event{
+			Type:      sse.EventTypeError,
+			ID:        messageID,
+			Error:     err.Error(),
+			SessionID: sessionID,
+		})
+		return
+	}
+
+	for {
+		event, ok := iter.Next()
+		if !ok {
+			break
+		}
+
+		sseEvents, err := processor.Process(event, eventCtx)
+		if err != nil {
+			_ = writer.Send(sse.Event{
+				Type:      sse.EventTypeError,
+				ID:        messageID,
+				Error:     err.Error(),
+				SessionID: sessionID,
+			})
+			return
+		}
+
+		for _, sseEvent := range sseEvents {
+			if err := writer.Send(sseEvent); err != nil {
+				return
+			}
+		}
+	}
+
+	_ = writer.SendComplete(sessionID, messageID)
+
+	// 持久化消息
+	ctx := c.Request.Context()
+	_, _ = h.biz.Sessions().AddMessage(ctx, sessionID, "user", req.Message)
+	if content := contentBuffer.String(); content != "" {
+		_, _ = h.biz.Sessions().AddMessage(ctx, sessionID, "assistant", content)
+	}
 }
 
 // ToggleAgent 启用/禁用 Agent.
