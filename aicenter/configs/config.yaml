@@ -1,0 +1,46 @@
+# Next-Show 配置文件
+
+server:
+  port: 8080
+  mode: debug  # debug / release
+
+# 追踪配置
+trace:
+  log_enabled: true   # 本地日志追踪（打印到控制台）
+  verbose: false      # 详细模式（显示完整内容）
+
+# Coze-Loop 可观测性配置
+cozeloop:
+  enabled: false  # 启用后需配置 workspace_id 和 api_token
+  workspace_id: ""  # 或通过环境变量 COZELOOP_WORKSPACE_ID
+  api_token: ""     # 或通过环境变量 COZELOOP_API_TOKEN
+  endpoint: ""      # 可选，默认使用官方端点
+
+database:
+  host: localhost
+  port: 5432
+  user: einoshow
+  password: einoshow
+  dbname: eino_scaffold
+  sslmode: disable
+  max_idle_conns: 10
+  max_open_conns: 100
+  conn_max_lifetime: 3600
+  auto_migrate: false  # 生产环境请使用 SQL 迁移脚本
+
+# 或直接使用 DSN
+# database:
+#   dsn: "host=localhost port=5432 user=einoshow password=einoshow dbname=eino_scaffold sslmode=disable"
+
+# Embedding 模型配置 (用于知识库向量搜索)
+embedding:
+  provider: dashscope  # dashscope / openai
+  api_key: ""          # 或通过环境变量 DASHSCOPE_API_KEY
+  base_url: ""         # 可选，openai 可自定义
+  model: text-embedding-v4
+  dimensions: 1024
+  timeout: 30          # 秒
+
+# 知识库配置
+knowledge:
+  default_kb_ids: []   # 默认使用的知识库 ID 列表
